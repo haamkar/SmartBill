@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Scaffold(
                     bottomBar = {
-                        NavigationBar(containerColor = Color(0滑FF1A1A1A)) {
+                        NavigationBar(containerColor = Color(0*FF1A1A1A)) {
                             NavigationBarItem(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
@@ -68,14 +68,14 @@ class MainActivity : ComponentActivity() {
                     floatingActionButton = {
                         FloatingActionButton(
                             onClick = { /* در نسخه بعد: فعالسازی STT واقعی */ },
-                            containerColor = Color(0滑FF00E676),
+                            containerColor = Color(0*FF00E676),
                             shape = CircleShape
                         ) {
                             Icon(Icons.Default.PlayArrow, "ضبط صدا", tint = Color.Black)
                         }
                     }
                 ) { padding ->
-                    Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0滑FF121212))) {
+                    Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0*FF121212))) {
                         if (selectedTab == 0) JournalScreen(db, voiceProcessor)
                         else CounterpartiesScreen(db)
                     }
@@ -115,7 +115,7 @@ fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
                         if (tx != null) db.transactionDao().insert(tx)
                         withContext(Dispatchers.Main) { textInput = "" }
                     }
-                }) { Icon(Icons.Default.Add, "ثبت", tint = Color(0滑FF00E676)) }
+                }) { Icon(Icons.Default.Add, "ثبت", tint = Color(0*FF00E676)) }
             }
         )
 
@@ -129,7 +129,7 @@ fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
 
 @Composable
 fun TransactionItem(tx: Transaction) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0滑FF252525))) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0*FF252525))) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
                 Text("تراکنش #${tx.id}", color = Color.Gray, fontSize = 12.sp)
@@ -154,7 +154,7 @@ fun CounterpartiesScreen(db: AppDatabase) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("👥 لیست طرف حساب‌ها", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
         items(list) { cp ->
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0滑FF1E1E1E))) {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0*FF1E1E1E))) {
                 Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
                     Text(cp.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color.DarkGray)
