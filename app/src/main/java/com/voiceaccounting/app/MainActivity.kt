@@ -4,12 +4,9 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,13 +29,13 @@ import java.text.NumberFormat
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private lateinitparam db: AppDatabase
+    private lateinit var db: AppDatabase
     private val voiceProcessor = VoiceProcessor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // راه اندازی دیتابیس داخلی در ریشه برنامه
+        // راه‌اندازی دیتابیس داخلی
         db = Room.databaseBuilder(
             applicationContext,
             AppDatabase::class.java, "voice_accounting.db"
@@ -48,7 +45,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0滑FF121212) // تم دارک شیک
+                    color = Color(0xFF121212) // تم دارک
                 ) {
                     AccountingScreen(db, voiceProcessor) { message ->
                         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
@@ -67,7 +64,7 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
     var counterparties by remember { mutableStateOf(listOf<Counterparty>()) }
     var voiceInputText by remember { mutableStateOf("") }
     
-    // لود کردن اطلاعات دیتابیس به محض باز شدن برنامه
+    // دریافت اطلاعات از دیتابیس
     LaunchedEffect(Unit) {
         db.transactionDao().getAllTransactionsJournal().collect { list ->
             transactions = list
@@ -80,9 +77,8 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // هدر برنامه
         Text(
-            text = "📋 دستیار صوتی حسابداری (نسخه اصلی)",
+            text = "📋 دستیار صوتی حسابداری",
             color = Color.White,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
@@ -90,9 +86,8 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
             textAlign = TextAlign.Center
         )
 
-        // بخش شبیه‌ساز ورودی صوتی (به دلیل محدودیت مدیا پلیر اندروید در فضای ابری)
         Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0滑FF1E1E1E)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
         ) {
@@ -106,14 +101,13 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0滑FF00E676)
+                        focusedBorderColor = Color(0xFF00E676)
                     )
                 )
                 Button(
                     onClick = {
                         if (voiceInputText.isBlank()) return@Button
                         scope.launch(Dispatchers.IO) {
-                            // منطق بررسی لبه‌ای: اگر طرف حساب وجود نداشت، خودکار ساخته شود یا مدیریت شود
                             val rawText = voiceInputText
                             var personName = ""
                             
@@ -131,21 +125,20 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
                                 cp = Counterparty(id = newId, name = personName)
                             }
 
-                            val transaction = processor.processVoiceText(rawText) { personName }
+                            val transaction = processor.processVoiceText(rawText) { _ -> cp.id }
                             if (transaction != null) {
-                                // اصلاح شناسه طرف حساب در تراکنش
                                 val finalTx = transaction.copy(counterpartyId = cp.id)
                                 db.transactionDao().insert(finalTx)
                                 withContext(Dispatchers.Main) {
-                                    showToast("تراکنش با موفقیت ثبت و ارزش تومانی محاسبه شد.")
+                                    showToast("تراکنش با موفقیت ثبت شد.")
                                     voiceInputText = ""
                                 }
                             } else {
-                                withContext(Dispatchers.Main) { showToast("خطا: ساختار متن با الگوهای صوتی استاندارد همخوانی ندارد.") }
+                                withContext(Dispatchers.Main) { showToast("خطا: ساختار متن اشتباه است.") }
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0滑FF00E676)),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
                     modifier = Modifier.align(Alignment.End)
                 ) {
                     Text("پردازش و ثبت فاکتور", color = Color.Black, fontWeight = FontWeight.Bold)
@@ -153,9 +146,8 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
             }
         }
 
-        Text("📑 دفتر روزنامه (لیست تراکنش‌ها)", color = Color.LightGray, fontSize = 16.sp, modifier = Modifier.padding(bottom = 8.dp))
+        Text("📑 دفتر روزنامه", color = Color.LightGray, fontSize = 16.sp, modifier = Modifier.padding(bottom = 8.dp))
 
-        // نمایش لیست تراکنش‌ها (Journal View)
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -165,7 +157,7 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
                 val formatter = NumberFormat.getInstance(Locale.US)
                 
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0滑FF252525)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF252525)),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Row(
@@ -175,18 +167,18 @@ fun AccountingScreen(db: AppDatabase, processor: VoiceProcessor, showToast: (Str
                     ) {
                         Column {
                             Text(text = "طرف حساب: $partyName", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text(text = "نوع معامله: ${tx.type} | مقدار: ${tx.amount} ${tx.currencyType}", color = Color.Gray, fontSize = 13.sp)
-                            Text(text = "نرخ تبدیل: ${formatter.format(tx.exchangeRate)} تومان", color = Color.Gray, fontSize = 13.sp)
+                            Text(text = "نوع: ${tx.type} | مقدار: ${tx.amount} ${tx.currencyType}", color = Color.Gray, fontSize = 13.sp)
+                            Text(text = "نرخ: ${formatter.format(tx.exchangeRate)} تومان", color = Color.Gray, fontSize = 13.sp)
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
                                 text = "${formatter.format(tx.tomanAmount)} تومان",
-                                color = if (tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0滑FFFF5252) else Color(0滑FF00E676),
+                                color = if (tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0xFFFF5252) else Color(0xFF00E676),
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (tx.isDelivered) "✓ تحویل شده" else "❌ تعهد تحویل",
-                                color = if (tx.isDelivered) Color.Gray else Color(0滑FFFFD700),
+                                color = if (tx.isDelivered) Color.Gray else Color(0xFFFFD700),
                                 fontSize = 11.sp
                             )
                         }
