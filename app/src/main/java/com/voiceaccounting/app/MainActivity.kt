@@ -1,7 +1,6 @@
 package com.voiceaccounting.app
 
 import android.Manifest
-import android.content.Context
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -27,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.Room
@@ -60,13 +58,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             var selectedTab by remember { mutableStateOf(0) }
             var isRecording by remember { mutableStateOf(false) }
-            val scope = rememberCoroutineScope()
 
             val permissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission()
             ) { isGranted ->
                 if (!isGranted) {
-                    Toast.makeText(this, "برای ضبط صدا باید دسترسی میکروفون را تایید کنید", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "دسترسی میکروفون تایید نشد", Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -81,7 +78,7 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
-                                icon = { Icon(Icons.Default.List, contentDescription = "دفتر روزنامه") },
+                                icon = { Icon(Icons.Default.List, contentDescription = "روزنامه") },
                                 label = { Text("روزنامه") }
                             )
                             NavigationBarItem(
@@ -96,15 +93,14 @@ class MainActivity : ComponentActivity() {
                         FloatingActionButton(
                             onClick = {
                                 if (!isRecording) {
-                                    val success = startRecording()
-                                    if (success) {
+                                    if (startRecording()) {
                                         isRecording = true
-                                        Toast.makeText(this@MainActivity, "در حال ضبط صدا... (دوباره کلیک کنید تا متوقف شود)", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "در حال ضبط واقعی صدا...", Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
                                     stopRecording()
                                     isRecording = false
-                                    Toast.makeText(this@MainActivity, "صدا ضبط و ذخیره شد. اکنون متن آن را در کادر بنویسید تا فاکتور صوتی ثبت شود.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(this@MainActivity, "صدا ذخیره شد. متن را وارد و ثبت کنید.", Toast.LENGTH_LONG).show()
                                 }
                             },
                             containerColor = if (isRecording) Color.Red else Color(0xFF00E676),
@@ -132,6 +128,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun startRecording(): Boolean {
         return try {
             val outputDir = File(getExternalFilesDir(null), "VoiceAccounting")
@@ -141,32 +138,31 @@ class MainActivity : ComponentActivity() {
             val audioFile = File(outputDir, "AUDIO_$timeStamp.mp3")
             currentAudioPath = audioFile.absolutePath
 
-            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(applicationContext)
             } else {
-                @Suppress("DEPRECATION") MediaRecorder()
-            }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(currentAudioPath)
-                prepare()
-                start()
+                MediaRecorder()
             }
+            
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setOutputFile(currentAudioPath)
+            recorder.prepare()
+            recorder.start()
+            
+            mediaRecorder = recorder
             true
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(this, "خطا در ضبط صدا: ${e.message}", Toast.LENGTH_SHORT).show()
             false
         }
     }
 
     private fun stopRecording() {
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            mediaRecorder?.stop()
+            mediaRecorder?.release()
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -177,14 +173,13 @@ class MainActivity : ComponentActivity() {
     private fun playAudio(path: String) {
         try {
             mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(path)
-                prepare()
-                start()
-            }
-            Toast.makeText(this, "در حال پخش صدای معامله...", Toast.LENGTH_SHORT).show()
+            val player = MediaPlayer()
+            player.setDataSource(path)
+            player.prepare()
+            player.start()
+            mediaPlayer = player
         } catch (e: Exception) {
-            Toast.makeText(this, "خطا در پخش فایل صوتی یا فایل حذف شده است", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
         }
     }
 
@@ -223,20 +218,13 @@ fun JournalScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("🗄️ تعداد کل فاکتورها در دیتابیس: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
-        
-        if (audioPathToSave != null) {
-            Text("🎙️ یک فایل صوتی ضبط شده آماده اتصال به فاکتور است.", color = Color.Yellow, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-        Text("🎙️ پردازش متن و تایید فاکتور صوتی", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text("تعداد کل فاکتورها: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
         
         OutlinedTextField(
             value = textInput,
             onValueChange = { textInput = it },
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            placeholder = { Text("متن فاکتور: فروختم ۱۰۰۰ دلار در ۱۵۵ به جعفر تحویل نشد") },
+            placeholder = { Text("متن صوتی فاکتور را اینجا بنویسید") },
             trailingIcon = {
                 IconButton(onClick = {
                     if (textInput.isBlank()) return@IconButton
@@ -259,25 +247,24 @@ fun JournalScreen(
                         }
                         withContext(Dispatchers.Main) { textInput = "" }
                     }
-                }) { Icon(Icons.Default.Add, "ثبت فاکتور صوتی", tint = Color(0xFF00E676)) }
+                }) { Icon(Icons.Default.Add, "ثبت") }
             }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
-        Text("✏️ ثبت فاکتور دستی (بدون نیاز به صدا)", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         
-        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام شخص") }, modifier = Modifier.weight(1f))
                     OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار") }, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                    OutlinedTextField(value = manualRate, onValueChange = { manualRate = it }, label = { Text("نرخ واحد") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = manualCurrency, onValueChange = { manualCurrency = it }, label = { Text("نوع ارز") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualRate, onValueChange = { manualRate = it }, label = { Text("نرخ") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualCurrency, onValueChange = { manualCurrency = it }, label = { Text("ارز") }, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { manualType = if(manualType == "SELL") "BUY" else "SELL" }, colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)) {
+                    Button(onClick = { manualType = if(manualType == "SELL") "BUY" else "SELL" }) {
                         Text(if(manualType == "SELL") "نوع: فروش" else "نوع: خرید")
                     }
                     Spacer(modifier = Modifier.weight(1f))
@@ -307,15 +294,14 @@ fun JournalScreen(
                                 manualName = ""; manualAmount = ""; manualRate = ""
                             }
                         }
-                    }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))) {
-                        Text("ثبت فاکتور دستی", color = Color.Black)
+                    }) {
+                        Text("ثبت دستی")
                     }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        Text("📑 دفتر روزنامه (لیست معاملات)", color = Color.Gray, fontSize = 14.sp)
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(transactions) { tx ->
@@ -331,24 +317,17 @@ fun TransactionItem(tx: Transaction, partyName: String, onPlayAudio: (String) ->
     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF252525))) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text("طرف حساب: $partyName", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(partyName, color = Color.White, fontWeight = FontWeight.Bold)
                 Text("${tx.amount} ${tx.currencyType} (نرخ: ${tx.exchangeRate})", color = Color.Gray, fontSize = 13.sp)
-                
                 if (!tx.audioFilePath.isNullOrBlank()) {
-                    Button(
-                        onClick = { onPlayAudio(tx.audioFilePath) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.padding(top = 4.dp).height(28.dp)
-                    ) {
-                        Text("▶️ پخش صدای معامله", color = Color(0xFF00E676), fontSize = 11.sp)
+                    Button(onClick = { onPlayAudio(tx.audioFilePath) }, modifier = Modifier.padding(top = 4.dp)) {
+                        Text("▶️ پخش صدای معامله", fontSize = 11.sp)
                     }
                 }
             }
             Column(horizontalAlignment = Alignment.End) {
                 val fmt = NumberFormat.getInstance(Locale.US)
-                Text("${fmt.format(tx.tomanAmount)} تومان", color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0xFFFF5252) else Color(0xFF00E676), fontWeight = FontWeight.Bold)
-                Text(if(tx.isDelivered) "✓ تحویل شد" else "❌ تعهد تحویل", fontSize = 11.sp, color = Color.LightGray)
+                Text("${fmt.format(tx.tomanAmount)} تومان", color = if(tx.type == "BUY") Color.Red else Color.Green, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -367,7 +346,6 @@ fun CounterpartiesScreen(db: AppDatabase) {
     }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("👥 دفتر معین تومانی اشخاص", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
         items(list) { cp ->
             val personTxs = transactions.filter { it.counterpartyId == cp.id }
             var totalToman = 0.0
@@ -376,17 +354,16 @@ fun CounterpartiesScreen(db: AppDatabase) {
                 else if (tx.type == "BUY" || tx.type == "PAY_TOMAN") totalToman -= tx.tomanAmount
             }
 
-            val statusText = if (totalToman > 0) "بدهکار (Debtor)" else if (totalToman < 0) "بستانکار (Creditor)" else "تراز صفر"
-            val statusColor = if (totalToman > 0) Color(0xFFFF5252) else if (totalToman < 0) Color(0xFF00E676) else Color.Gray
+            val statusText = if (totalToman > 0) "بدهکار" else if (totalToman < 0) "بستانکار" else "تراز صفر"
             val fmt = NumberFormat.getInstance(Locale.US)
 
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                 Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
                     Text(cp.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.DarkGray)
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("وضعیت حساب:", color = Color.Gray)
-                        Text("$statusText: ${fmt.format(abs(totalToman))} تومان", color = statusColor, fontWeight = FontWeight.Bold)
+                        Text("وضعیت تراز مالی:", color = Color.Gray)
+                        Text("$statusText: ${fmt.format(abs(totalToman))} تومان", fontWeight = FontWeight.Bold)
                     }
                 }
             }
