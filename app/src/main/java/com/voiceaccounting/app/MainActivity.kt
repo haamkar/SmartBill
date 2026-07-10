@@ -25,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,13 +35,12 @@ import com.voiceaccounting.app.data.model.Counterparty
 import com.voiceaccounting.app.data.model.Transaction
 import com.voiceaccounting.app.domain.VoiceProcessor
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.NumberFormat
-import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Locale
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
     private val voiceProcessor = VoiceProcessor()
     private var mediaRecorder: MediaRecorder? = null
     private var mediaPlayer: MediaPlayer? = null
-    private var currentAudioPath: String? = null
+    private var tempAudioFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,12 +96,12 @@ class MainActivity : ComponentActivity() {
                                 if (!isRecording) {
                                     if (startRecording()) {
                                         isRecording = true
-                                        Toast.makeText(this@MainActivity, "در حال ضبط واقعی صدا...", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "در حال ضبط صدا...", Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
                                     stopRecording()
                                     isRecording = false
-                                    Toast.makeText(this@MainActivity, "صدا ذخیره شد. متن را وارد و ثبت کنید.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(this@MainActivity, "صدا ضبط شد! متن آن را بنویسید و ثبت کنید.", Toast.LENGTH_LONG).show()
                                 }
                             },
                             containerColor = if (isRecording) Color.Red else Color(0xFF00E676),
@@ -116,9 +116,7 @@ class MainActivity : ComponentActivity() {
                             JournalScreen(
                                 db = db,
                                 processor = voiceProcessor,
-                                audioPathToSave = currentAudioPath,
-                                onPlayAudio = { path -> playAudio(path) },
-                                onClearAudioPath = { currentAudioPath = null }
+                                onSaveAudioLink = { cpId, amount -> finalizeAudioName(cpId, amount) }
                             )
                         } else {
                             CounterpartiesScreen(db)
@@ -135,9 +133,7 @@ class MainActivity : ComponentActivity() {
             val outputDir = File(getExternalFilesDir(null), "VoiceAccounting")
             if (!outputDir.exists()) outputDir.mkdirs()
 
-            val timeStamp = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
-            val audioFile = File(outputDir, "AUDIO_$timeStamp.mp3")
-            currentAudioPath = audioFile.absolutePath
+            tempAudioFile = File(outputDir, "TEMP_RECORDING.mp3")
 
             val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(applicationContext)
@@ -148,7 +144,7 @@ class MainActivity : ComponentActivity() {
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            recorder.setOutputFile(currentAudioPath)
+            recorder.setOutputFile(tempAudioFile?.absolutePath)
             recorder.prepare()
             recorder.start()
             
@@ -171,14 +167,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun playAudio(path: String) {
+    private fun finalizeAudioName(counterpartyId: Long, amount: Double) {
         try {
-            mediaPlayer?.release()
-            val player = MediaPlayer()
-            player.setDataSource(path)
-            player.prepare()
-            player.start()
-            mediaPlayer = player
+            if (tempAudioFile != null && tempAudioFile!!.exists()) {
+                val outputDir = File(getExternalFilesDir(null), "VoiceAccounting")
+                val finalFile = File(outputDir, "AUDIO_${counterpartyId}_${amount.toInt()}.mp3")
+                tempAudioFile!!.renameTo(finalFile)
+                tempAudioFile = null
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -195,10 +191,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun JournalScreen(
     db: AppDatabase, 
-    processor: VoiceProcessor, 
-    audioPathToSave: String?,
-    onPlayAudio: (String) -> Unit,
-    onClearAudioPath: () -> Unit
+    processor: VoiceProcessor,
+    onSaveAudioLink: (Long, Double) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var transactions by remember { mutableStateOf(listOf<Transaction>()) }
@@ -212,20 +206,20 @@ fun JournalScreen(
     var manualCurrency by remember { mutableStateOf("دلار") }
 
     LaunchedEffect(Unit) {
-        db.transactionDao().getAllTransactionsJournal().collect { transactions = it }
+        db.transactionDao().getAllTransactionsJournal().collect { list -> transactions = list }
     }
     LaunchedEffect(Unit) {
-        db.counterpartyDao().getAllCounterparties().collect { counterparties = it }
+        db.counterpartyDao().getAllCounterparties().collect { list -> counterparties = list }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("تعداد کل فاکتورها: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
+        Text("تعداد فاکتورها در حافظه: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
         
         OutlinedTextField(
             value = textInput,
             onValueChange = { textInput = it },
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            placeholder = { Text("متن صوتی فاکتور را اینجا بنویسید") },
+            placeholder = { Text("متن فاکتور صوتی را اینجا بنویسید") },
             trailingIcon = {
                 IconButton(onClick = {
                     if (textInput.isBlank()) return@IconButton
@@ -243,8 +237,9 @@ fun JournalScreen(
                         
                         val tx = processor.processVoiceText(textInput) { cp.id }
                         if (tx != null) {
-                            db.transactionDao().insert(tx.copy(counterpartyId = cp.id, audioFilePath = audioPathToSave))
-                            onClearAudioPath()
+                            val finalTx = tx.copy(counterpartyId = cp.id)
+                            db.transactionDao().insert(finalTx)
+                            onSaveAudioLink(cp.id, finalTx.amount)
                         }
                         withContext(Dispatchers.Main) { textInput = "" }
                     }
@@ -252,7 +247,7 @@ fun JournalScreen(
             }
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -280,24 +275,25 @@ fun JournalScreen(
                                 val id = db.counterpartyDao().insert(Counterparty(name = manualName))
                                 cp = Counterparty(id = id, name = manualName)
                             }
-                            val newTx = Transaction(
-                                type = manualType,
-                                counterpartyId = cp.id,
-                                amount = amount,
-                                currencyType = manualCurrency,
-                                exchangeRate = rate,
-                                tomanAmount = amount * rate,
-                                isDelivered = true,
-                                timestamp = System.currentTimeMillis()
-                            )
-                            db.transactionDao().insert(newTx)
+                            val dummyText = "فروختم ${amount.toInt()} دلار به ${manualName}"
+                            val tx = processor.processVoiceText(dummyText) { cp.id }
+                            if (tx != null) {
+                                val finalTx = tx.copy(
+                                    counterpartyId = cp.id,
+                                    type = manualType,
+                                    amount = amount,
+                                    exchangeRate = rate,
+                                    tomanAmount = amount * rate,
+                                    currencyType = manualCurrency
+                                )
+                                db.transactionDao().insert(finalTx)
+                                onSaveAudioLink(cp.id, amount)
+                            }
                             withContext(Dispatchers.Main) {
                                 manualName = ""; manualAmount = ""; manualRate = ""
                             }
                         }
-                    }) {
-                        Text("ثبت دستی")
-                    }
+                    }) { Text("ثبت دستی") }
                 }
             }
         }
@@ -307,21 +303,39 @@ fun JournalScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(transactions) { tx ->
                 val name = counterparties.find { it.id == tx.counterpartyId }?.name ?: "ناشناس"
-                TransactionItem(tx, name, onPlayAudio)
+                TransactionItem(tx, name)
             }
         }
     }
 }
 
 @Composable
-fun TransactionItem(tx: Transaction, partyName: String, onPlayAudio: (String) -> Unit) {
+fun TransactionItem(tx: Transaction, partyName: String) {
+    val context = LocalContext.current
+    val outputDir = remember { File(context.getExternalFilesDir(null), "VoiceAccounting") }
+    val audioFile = remember(tx.counterpartyId, tx.amount) { File(outputDir, "AUDIO_${tx.counterpartyId}_${tx.amount.toInt()}.mp3") }
+    var hasAudio by remember { mutableStateOf(audioFile.exists()) }
+
     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF252525))) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text(partyName, color = Color.White, fontWeight = FontWeight.Bold)
                 Text("${tx.amount} ${tx.currencyType} (نرخ: ${tx.exchangeRate})", color = Color.Gray, fontSize = 13.sp)
-                if (!tx.audioFilePath.isNullOrBlank()) {
-                    Button(onClick = { onPlayAudio(tx.audioFilePath) }, modifier = Modifier.padding(top = 4.dp)) {
+                
+                if (hasAudio) {
+                    Button(
+                        onClick = {
+                            try {
+                                val player = MediaPlayer()
+                                player.setDataSource(audioFile.absolutePath)
+                                player.prepare()
+                                player.start()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "خطا در پخش صدا", Toast.LENGTH_SHORT).show()
+                            }
+                        }, 
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
                         Text("▶️ پخش صدای معامله", fontSize = 11.sp)
                     }
                 }
