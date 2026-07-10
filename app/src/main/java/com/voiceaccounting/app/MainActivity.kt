@@ -29,13 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.room.Room
-import com.voiceaccounting.app.data.AppDatabase
-import com.voiceaccounting.app.data.model.Counterparty
-import com.voiceaccounting.app.data.model.Transaction
-import com.voiceaccounting.app.domain.VoiceProcessor
+import androidx.room.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -43,28 +38,60 @@ import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
 
+// ==========================================
+// ۱. ساختار دیتابیس خودمختار و اختصاصی برنامه
+// ==========================================
+@Entity(tableName = "secure_voice_transactions")
+data class LocalTransaction(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val personName: String,
+    val type: String, // BUY, SELL
+    val amount: Double,
+    val rate: Double,
+    val currency: String,
+    val tomanAmount: Double,
+    val audioPath: String? = null
+)
+
+@Dao
+interface LocalTransactionDao {
+    @Query("SELECT * FROM secure_voice_transactions ORDER BY id DESC")
+    fun getAllTransactions(): kotlinx.coroutines.flow.Flow<List<LocalTransaction>>
+
+    @Insert
+    fun insertTransaction(tx: LocalTransaction)
+}
+
+@Database(entities = [LocalTransaction::class], version = 1, exportSchema = false)
+abstract class LocalAppDatabase : RoomDatabase() {
+    abstract fun localTransactionDao(): LocalTransactionDao
+}
+
+// ==========================================
+// ۲. بدنه اصلی نرم افزار و مدیریت سخت افزار صوت
+// ==========================================
 class MainActivity : ComponentActivity() {
-    private lateinit var db: AppDatabase
-    private val voiceProcessor = VoiceProcessor()
+    private lateinit var localDb: LocalAppDatabase
     private var mediaRecorder: MediaRecorder? = null
-    private var mediaPlayer: MediaPlayer? = null
-    private var tempAudioFile: File? = null
+    private var currentAudioPath: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "v_acc.db")
+        localDb = Room.databaseBuilder(applicationContext, LocalAppDatabase::class.java, "local_v_acc_secure.db")
             .fallbackToDestructiveMigration().build()
 
         setContent {
             var selectedTab by remember { mutableStateOf(0) }
             var isRecording by remember { mutableStateOf(false) }
+            var textInputState by remember { mutableStateOf("") }
+            val scope = rememberCoroutineScope()
 
             val permissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission()
             ) { isGranted ->
                 if (!isGranted) {
-                    Toast.makeText(this, "دسترسی میکروفون تایید نشد", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "دسترسی میکروفون داده نشد!", Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -96,12 +123,12 @@ class MainActivity : ComponentActivity() {
                                 if (!isRecording) {
                                     if (startRecording()) {
                                         isRecording = true
-                                        Toast.makeText(this@MainActivity, "در حال ضبط صدا...", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "🎙️ در حال ضبط صدای معامله...", Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
                                     stopRecording()
                                     isRecording = false
-                                    Toast.makeText(this@MainActivity, "صدا ضبط شد! متن آن را بنویسید و ثبت کنید.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(this@MainActivity, "✅ صدا ذخیره شد! جزئیات را وارد کنید.", Toast.LENGTH_LONG).show()
                                 }
                             },
                             containerColor = if (isRecording) Color.Red else Color(0xFF00E676),
@@ -112,14 +139,24 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0xFF121212))) {
+                        // دریافت زنده کل اطلاعات از دیتابیس اختصاصی
+                        val transactionsList by localDb.localTransactionDao().getAllTransactions().collectAsState(initial = emptyList())
+
                         if (selectedTab == 0) {
-                            JournalScreen(
-                                db = db,
-                                processor = voiceProcessor,
-                                onSaveAudioLink = { cpId, amount -> finalizeAudioName(cpId, amount) }
+                            JournalTabScreen(
+                                transactions = transactionsList,
+                                textInput = textInputState,
+                                onTextInputChange = { textInputState = it },
+                                onAddTransaction = { tx ->
+                                    scope.launch(Dispatchers.IO) {
+                                        localDb.localTransactionDao().insertTransaction(tx.copy(audioPath = currentAudioPath))
+                                        currentAudioPath = null
+                                        withContext(Dispatchers.Main) { textInputState = "" }
+                                    }
+                                }
                             )
                         } else {
-                            CounterpartiesScreen(db)
+                            CounterpartiesTabScreen(transactions = transactionsList)
                         }
                     }
                 }
@@ -130,10 +167,11 @@ class MainActivity : ComponentActivity() {
     @Suppress("DEPRECATION")
     private fun startRecording(): Boolean {
         return try {
-            val outputDir = File(getExternalFilesDir(null), "VoiceAccounting")
+            val outputDir = File(getExternalFilesDir(null), "SecureVoiceStorage")
             if (!outputDir.exists()) outputDir.mkdirs()
 
-            tempAudioFile = File(outputDir, "TEMP_RECORDING.mp3")
+            val audioFile = File(outputDir, "REC_${System.currentTimeMillis()}.mp3")
+            currentAudioPath = audioFile.absolutePath
 
             val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(applicationContext)
@@ -144,7 +182,7 @@ class MainActivity : ComponentActivity() {
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            recorder.setOutputFile(tempAudioFile?.absolutePath)
+            recorder.setOutputFile(currentAudioPath)
             recorder.prepare()
             recorder.start()
             
@@ -166,98 +204,75 @@ class MainActivity : ComponentActivity() {
             mediaRecorder = null
         }
     }
-
-    private fun finalizeAudioName(counterpartyId: Long, amount: Double) {
-        try {
-            if (tempAudioFile != null && tempAudioFile!!.exists()) {
-                val outputDir = File(getExternalFilesDir(null), "VoiceAccounting")
-                val finalFile = File(outputDir, "AUDIO_${counterpartyId}_${amount.toInt()}.mp3")
-                tempAudioFile!!.renameTo(finalFile)
-                tempAudioFile = null
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        mediaRecorder?.release()
-        mediaPlayer?.release()
-    }
 }
 
+// ==========================================
+// ۳. رابط کاربری تب دفتر روزنامه (ثبت صوتی و دستی)
+// ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun JournalScreen(
-    db: AppDatabase, 
-    processor: VoiceProcessor,
-    onSaveAudioLink: (Long, Double) -> Unit
+fun JournalTabScreen(
+    transactions: List<LocalTransaction>,
+    textInput: String,
+    onTextInputChange: (String) -> Unit,
+    onAddTransaction: (LocalTransaction) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    var transactions by remember { mutableStateOf(listOf<Transaction>()) }
-    var counterparties by remember { mutableStateOf(listOf<Counterparty>()) }
-    var textInput by remember { mutableStateOf("") }
-
     var manualName by remember { mutableStateOf("") }
     var manualAmount by remember { mutableStateOf("") }
     var manualRate by remember { mutableStateOf("") }
     var manualType by remember { mutableStateOf("SELL") }
     var manualCurrency by remember { mutableStateOf("دلار") }
 
-    LaunchedEffect(Unit) {
-        db.transactionDao().getAllTransactionsJournal().collect { list -> transactions = list }
-    }
-    LaunchedEffect(Unit) {
-        db.counterpartyDao().getAllCounterparties().collect { list -> counterparties = list }
-    }
-
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("تعداد فاکتورها در حافظه: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
+        Text("🗄️ تعداد فاکتورهای فعال دیتابیس: ${transactions.size}", color = Color(0xFF00E676), fontSize = 12.sp)
         
+        // بخش پردازش متن فاکتور صوتی
         OutlinedTextField(
             value = textInput,
-            onValueChange = { textInput = it },
+            onValueChange = onTextInputChange,
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             placeholder = { Text("متن فاکتور صوتی را اینجا بنویسید") },
             trailingIcon = {
                 IconButton(onClick = {
                     if (textInput.isBlank()) return@IconButton
-                    scope.launch(Dispatchers.IO) {
-                        var personName = ""
-                        if (textInput.contains("به ")) personName = textInput.substringAfter("به ").substringBefore(" ")
-                        if (textInput.contains("از ")) personName = textInput.substringAfter("از ").substringBefore(" ")
-                        if (personName.isBlank()) personName = "ناشناس"
+                    
+                    // موتور تجزیه متن هوشمند داخلی برای جلوگیری از تداخل کلاس‌ها
+                    var detectedName = "ناشناس"
+                    if (textInput.contains("به ")) detectedName = textInput.substringAfter("به ").substringBefore(" ")
+                    if (textInput.contains("از ")) detectedName = textInput.substringAfter("از ").substringBefore(" ")
+                    
+                    val numbers = "[0-9]+".toRegex().findAll(textInput).map { it.value.toDoubleOrNull() ?: 0.0 }.toList()
+                    val amt = if (numbers.isNotEmpty()) numbers[0] else 1.0
+                    val rt = if (numbers.size > 1) numbers[1] else 1.0
+                    val cur = if (textInput.contains("یورو")) "یورو" else "دلار"
+                    val tp = if (textInput.contains("خریدم") || textInput.contains("خرید")) "BUY" else "SELL"
 
-                        var cp = db.counterpartyDao().getByName(personName)
-                        if (cp == null) {
-                            val id = db.counterpartyDao().insert(Counterparty(name = personName))
-                            cp = Counterparty(id = id, name = personName)
-                        }
-                        
-                        val tx = processor.processVoiceText(textInput) { cp.id }
-                        if (tx != null) {
-                            val finalTx = tx.copy(counterpartyId = cp.id)
-                            db.transactionDao().insert(finalTx)
-                            onSaveAudioLink(cp.id, finalTx.amount)
-                        }
-                        withContext(Dispatchers.Main) { textInput = "" }
-                    }
-                }) { Icon(Icons.Default.Add, "ثبت") }
+                    onAddTransaction(
+                        LocalTransaction(
+                            personName = detectedName,
+                            type = tp,
+                            amount = amt,
+                            rate = rt,
+                            currency = cur,
+                            tomanAmount = amt * rt
+                        )
+                    )
+                }) { Icon(Icons.Default.Add, "ثبت فاکتور") }
             }
         )
 
         Spacer(modifier = Modifier.height(6.dp))
         
+        // فرم ثبت فاکتور به صورت دستی
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام شخص") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار ارز") }, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                    OutlinedTextField(value = manualRate, onValueChange = { manualRate = it }, label = { Text("نرخ") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = manualCurrency, onValueChange = { manualCurrency = it }, label = { Text("ارز") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualRate, onValueChange = { manualRate = it }, label = { Text("نرخ تبدیل") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualCurrency, onValueChange = { manualCurrency = it }, label = { Text("نوع ارز") }, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = { manualType = if(manualType == "SELL") "BUY" else "SELL" }) {
@@ -265,34 +280,21 @@ fun JournalScreen(
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     Button(onClick = {
-                        val amount = manualAmount.toDoubleOrNull() ?: 0.0
-                        val rate = manualRate.toDoubleOrNull() ?: 1.0
-                        if (manualName.isBlank() || amount <= 0) return@Button
+                        val amt = manualAmount.toDoubleOrNull() ?: 0.0
+                        val rt = manualRate.toDoubleOrNull() ?: 1.0
+                        if (manualName.isBlank() || amt <= 0) return@Button
                         
-                        scope.launch(Dispatchers.IO) {
-                            var cp = db.counterpartyDao().getByName(manualName)
-                            if (cp == null) {
-                                val id = db.counterpartyDao().insert(Counterparty(name = manualName))
-                                cp = Counterparty(id = id, name = manualName)
-                            }
-                            val dummyText = "فروختم ${amount.toInt()} دلار به ${manualName}"
-                            val tx = processor.processVoiceText(dummyText) { cp.id }
-                            if (tx != null) {
-                                val finalTx = tx.copy(
-                                    counterpartyId = cp.id,
-                                    type = manualType,
-                                    amount = amount,
-                                    exchangeRate = rate,
-                                    tomanAmount = amount * rate,
-                                    currencyType = manualCurrency
-                                )
-                                db.transactionDao().insert(finalTx)
-                                onSaveAudioLink(cp.id, amount)
-                            }
-                            withContext(Dispatchers.Main) {
-                                manualName = ""; manualAmount = ""; manualRate = ""
-                            }
-                        }
+                        onAddTransaction(
+                            LocalTransaction(
+                                personName = manualName,
+                                type = manualType,
+                                amount = amt,
+                                rate = rt,
+                                currency = manualCurrency,
+                                tomanAmount = amt * rt
+                            )
+                        )
+                        manualName = ""; manualAmount = ""; manualRate = ""
                     }) { Text("ثبت دستی") }
                 }
             }
@@ -300,87 +302,70 @@ fun JournalScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // نمایش لیست فاکتورهای روزنامه
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(transactions) { tx ->
-                val name = counterparties.find { it.id == tx.counterpartyId }?.name ?: "ناشناس"
-                TransactionItem(tx, name)
-            }
-        }
-    }
-}
-
-@Composable
-fun TransactionItem(tx: Transaction, partyName: String) {
-    val context = LocalContext.current
-    val outputDir = remember { File(context.getExternalFilesDir(null), "VoiceAccounting") }
-    val audioFile = remember(tx.counterpartyId, tx.amount) { File(outputDir, "AUDIO_${tx.counterpartyId}_${tx.amount.toInt()}.mp3") }
-    var hasAudio by remember { mutableStateOf(audioFile.exists()) }
-
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF252525))) {
-        Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text(partyName, color = Color.White, fontWeight = FontWeight.Bold)
-                Text("${tx.amount} ${tx.currencyType} (نرخ: ${tx.exchangeRate})", color = Color.Gray, fontSize = 13.sp)
-                
-                if (hasAudio) {
-                    Button(
-                        onClick = {
-                            try {
-                                val player = MediaPlayer()
-                                player.setDataSource(audioFile.absolutePath)
-                                player.prepare()
-                                player.start()
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "خطا در پخش صدا", Toast.LENGTH_SHORT).show()
+                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF252525))) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column {
+                            Text(tx.personName, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("${tx.amount} ${tx.currency} (نرخ: ${tx.rate})", color = Color.Gray, fontSize = 13.sp)
+                            
+                            if (!tx.audioPath.isNullOrBlank()) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val player = MediaPlayer()
+                                            player.setDataSource(tx.audioPath)
+                                            player.prepare()
+                                            player.start()
+                                        } catch (e: Exception) { e.printStackTrace() }
+                                    }, 
+                                    modifier = Modifier.padding(top = 4.dp)
+                                ) { Text("▶️ پخش صدای معامله", fontSize = 11.sp) }
                             }
-                        }, 
-                        modifier = Modifier.padding(top = 4.dp)
-                    ) {
-                        Text("▶️ پخش صدای معامله", fontSize = 11.sp)
+                        }
+                        val fmt = NumberFormat.getInstance(Locale.US)
+                        Text("${fmt.format(tx.tomanAmount)} تومان", color = if(tx.type == "BUY") Color.Red else Color.Green, fontWeight = FontWeight.Bold)
                     }
                 }
             }
-            Column(horizontalAlignment = Alignment.End) {
-                val fmt = NumberFormat.getInstance(Locale.US)
-                Text("${fmt.format(tx.tomanAmount)} تومان", color = if(tx.type == "BUY") Color.Red else Color.Green, fontWeight = FontWeight.Bold)
-            }
         }
     }
 }
 
+// ==========================================
+// ۴. رابط کاربری تب حساب معین اشخاص (تراز زنده)
+// ==========================================
 @Composable
-fun CounterpartiesScreen(db: AppDatabase) {
-    var list by remember { mutableStateOf(listOf<Counterparty>()) }
-    var transactions by remember { mutableStateOf(listOf<Transaction>()) }
-
-    LaunchedEffect(Unit) {
-        db.counterpartyDao().getAllCounterparties().collect { list = it }
-    }
-    LaunchedEffect(Unit) {
-        db.transactionDao().getAllTransactionsJournal().collect { transactions = it }
-    }
+fun CounterpartiesTabScreen(transactions: List<LocalTransaction>) {
+    // گروه بندی خودکار اشخاص و محاسبه ریاضی تراز بدهکار/بستانکار
+    val uniqueNames = transactions.map { it.personName }.distinct()
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(list) { cp ->
-            val personTxs = transactions.filter { it.counterpartyId == cp.id }
-            var totalToman = 0.0
+        item { Text("👥 دفتر معین تومانی اشخاص", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+        
+        items(uniqueNames) { name ->
+            val personTxs = transactions.filter { it.personName == name }
+            var totalBalance = 0.0
             personTxs.forEach { tx ->
-                if (tx.type == "SELL" || tx.type == "RECEIVE_TOMAN") totalToman += tx.tomanAmount
-                else if (tx.type == "BUY" || tx.type == "PAY_TOMAN") totalToman -= tx.tomanAmount
+                if (tx.type == "SELL") totalBalance += tx.tomanAmount
+                else totalBalance -= tx.tomanAmount
             }
 
-            val statusText = if (totalToman > 0) "بدهکار" else if (totalToman < 0) "بستانکار" else "تراز صفر"
+            val statusText = if (totalBalance > 0) "بدهکار" else if (totalBalance < 0) "بستانکار" else "تراز صفر"
+            val statusColor = if (totalBalance > 0) Color(0xFFFF5252) else if (totalBalance < 0) Color(0xFF00E676) else Color.Gray
             val fmt = NumberFormat.getInstance(Locale.US)
 
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                 Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
-                    Text(cp.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.DarkGray))
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("وضعیت تراز مالی:", color = Color.Gray)
-                        Text("$statusText: ${fmt.format(abs(totalToman))} تومان", fontWeight = FontWeight.Bold)
+                        Text("$statusText: ${fmt.format(abs(totalBalance))} تومان", color = statusColor, fontWeight = FontWeight.Bold)
                     }
                 }
             }
