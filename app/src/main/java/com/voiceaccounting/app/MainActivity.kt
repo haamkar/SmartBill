@@ -1,9 +1,14 @@
 package com.voiceaccounting.app
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,6 +52,18 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var selectedTab by remember { mutableStateOf(0) }
+            var voiceTextResult by remember { mutableStateOf("") }
+            val scope = rememberCoroutineScope()
+
+            // ابزار رسمی اندروید برای فعال‌سازی میکروفون و تبدیل صوت به متن فارسی
+            val speechLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartActivityForResult()
+            ) { result ->
+                if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                    val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.get(0) ?: ""
+                    voiceTextResult = spokenText
+                }
+            }
             
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Scaffold(
@@ -68,7 +85,18 @@ class MainActivity : ComponentActivity() {
                     },
                     floatingActionButton = {
                         FloatingActionButton(
-                            onClick = { /* در نسخه‌های بعدی: اتصال به لایه ضبط صدای واقعی */ },
+                            onClick = {
+                                try {
+                                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
+                                        putExtra(RecognizerIntent.EXTRA_PROMPT, "معامله را بگویید...")
+                                    }
+                                    speechLauncher.launch(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(this, "خطا در راه‌اندازی میکروفون", Toast.LENGTH_SHORT).show()
+                                }
+                            },
                             containerColor = Color(0xFF00E676),
                             shape = CircleShape
                         ) {
@@ -77,8 +105,11 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0xFF121212))) {
-                        if (selectedTab == 0) JournalScreen(db, voiceProcessor)
-                        else CounterpartiesScreen(db)
+                        if (selectedTab == 0) {
+                            JournalScreen(db, voiceProcessor, voiceTextResult, onTextProcessed = { voiceTextResult = "" })
+                        } else {
+                            CounterpartiesScreen(db)
+                        }
                     }
                 }
             }
@@ -88,11 +119,23 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
+fun JournalScreen(db: AppDatabase, processor: VoiceProcessor, externalVoiceText: String, onTextProcessed: () -> Unit) {
     val scope = rememberCoroutineScope()
     var transactions by remember { mutableStateOf(listOf<Transaction>()) }
-    var textInput by remember { mutableStateOf("") }
     var counterparties by remember { mutableStateOf(listOf<Counterparty>()) }
+    var textInput by remember { mutableStateOf("") }
+
+    // فرم دستی تراکنش
+    var manualName by remember { mutableStateOf("") }
+    var manualAmount by remember { mutableStateOf("") }
+    var manualRate by remember { mutableStateOf("") }
+    var manualType by remember { mutableStateOf("SELL") } // BUY, SELL, RECEIVE_TOMAN, PAY_TOMAN
+    var manualCurrency by remember { mutableStateOf("دلار") }
+
+    if (externalVoiceText.isNotBlank()) {
+        textInput = externalVoiceText
+        onTextProcessed()
+    }
 
     LaunchedEffect(Unit) {
         db.transactionDao().getAllTransactionsJournal().collect { transactions = it }
@@ -102,12 +145,16 @@ fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("🎙️ دستور صوتی (شبیه‌ساز متنی)", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("🗄️ وضعیت دیتابیس: ${transactions.size} تراکنش ذخیره شده", color = Color(0xFF00E676), fontSize = 12.sp)
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("🎙️ پردازش دستور صوتی فارسی", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        
         OutlinedTextField(
             value = textInput,
             onValueChange = { textInput = it },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            placeholder = { Text("مثلاً: فروختم ۱۰۰۰ دلار در ۱۵۵ به جعفر تحویل نشد") },
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            placeholder = { Text("متن ویس یا تایپ: فروختم ۱۰۰۰ دلار در ۱۵۵ به جعفر تحویل نشد") },
             trailingIcon = {
                 IconButton(onClick = {
                     if (textInput.isBlank()) return@IconButton
@@ -115,7 +162,6 @@ fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
                         var personName = ""
                         if (textInput.contains("به ")) personName = textInput.substringAfter("به ").substringBefore(" ")
                         if (textInput.contains("از ")) personName = textInput.substringAfter("از ").substringBefore(" ")
-                        
                         if (personName.isBlank()) personName = "ناشناس"
 
                         var cp = db.counterpartyDao().getByName(personName)
@@ -131,17 +177,64 @@ fun JournalScreen(db: AppDatabase, processor: VoiceProcessor) {
                         withContext(Dispatchers.Main) { textInput = "" }
                     }
                 }) { Icon(Icons.Default.Add, "ثبت", tint = Color(0xFF00E676)) }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White
-            )
+            }
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("📑 معاملات ثبت شده امروز", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(bottom = 8.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text("✏️ ثبت دستی تراکنش (بدون نیاز به ویس)", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        
+        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام شخص") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار") }, modifier = Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    OutlinedTextField(value = manualRate, onValueChange = { manualRate = it }, label = { Text("نرخ واحد") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = manualCurrency, onValueChange = { manualCurrency = it }, label = { Text("ارز (دلار/تومان)") }, modifier = Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { manualType = if(manualType == "SELL") "BUY" else "SELL" }, colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)) {
+                        Text(if(manualType == "SELL") "نوع: فروش" else "نوع: خرید")
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Button(onClick = {
+                        val amount = manualAmount.toDoubleOrNull() ?: 0.0
+                        val rate = manualRate.toDoubleOrNull() ?: 1.0
+                        if (manualName.isBlank() || amount <= 0) return@Button
+                        
+                        scope.launch(Dispatchers.IO) {
+                            var cp = db.counterpartyDao().getByName(manualName)
+                            if (cp == null) {
+                                val id = db.counterpartyDao().insert(Counterparty(name = manualName))
+                                cp = Counterparty(id = id, name = manualName)
+                            }
+                            val newTx = Transaction(
+                                type = manualType,
+                                counterpartyId = cp.id,
+                                amount = amount,
+                                currencyType = manualCurrency,
+                                exchangeRate = rate,
+                                tomanAmount = amount * rate,
+                                isDelivered = true,
+                                timestamp = System.currentTimeMillis()
+                            )
+                            db.transactionDao().insert(newTx)
+                            withContext(Dispatchers.Main) {
+                                manualName = ""; manualAmount = ""; manualRate = ""
+                            }
+                        }
+                    }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))) {
+                        Text("ثبت دستی فاکتور", color = Color.Black)
+                    }
+                }
+            }
+        }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Text("📑 دفتر روزنامه (لیست معاملات)", color = Color.Gray, fontSize = 14.sp)
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(transactions) { tx ->
                 val name = counterparties.find { it.id == tx.counterpartyId }?.name ?: "ناشناس"
                 TransactionItem(tx, name)
@@ -161,7 +254,7 @@ fun TransactionItem(tx: Transaction, partyName: String) {
             Column(horizontalAlignment = Alignment.End) {
                 val fmt = NumberFormat.getInstance(Locale.US)
                 Text("${fmt.format(tx.tomanAmount)} تومان", color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0xFFFF5252) else Color(0xFF00E676), fontWeight = FontWeight.Bold)
-                Text(if(tx.isDelivered) "✓ تحویل شد" else "❌ تعهد تحویل", fontSize = 11.sp, color = Color.LightGray)
+                Text(if(tx.isDelivered) "✓ تحویل شده" else "❌ تعهد تحویل", fontSize = 11.sp, color = Color.LightGray)
             }
         }
     }
@@ -180,17 +273,13 @@ fun CounterpartiesScreen(db: AppDatabase) {
     }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("👥 وضعیت معین و تراز طرف حساب‌ها", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+        item { Text("👥 دفتر معین تومانی اشخاص", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
         items(list) { cp ->
-            // محاسبه هوشمند ریاضی تراز تومانی هر شخص بر اساس استاندارد سند SRS
             val personTxs = transactions.filter { it.counterpartyId == cp.id }
             var totalToman = 0.0
             personTxs.forEach { tx ->
-                if (tx.type == "SELL" || tx.type == "RECEIVE_TOMAN") {
-                    totalToman += tx.tomanAmount // او به ما بدهکار می‌شود یا دریافتی ماست
-                } else if (tx.type == "BUY" || tx.type == "PAY_TOMAN") {
-                    totalToman -= tx.tomanAmount // ما به او بدهکار می‌شویم
-                }
+                if (tx.type == "SELL" || tx.type == "RECEIVE_TOMAN") totalToman += tx.tomanAmount
+                else if (tx.type == "BUY" || tx.type == "PAY_TOMAN") totalToman -= tx.tomanAmount
             }
 
             val statusText = if (totalToman > 0) "بدهکار (Debtor)" else if (totalToman < 0) "بستانکار (Creditor)" else "تراز صفر"
@@ -202,7 +291,7 @@ fun CounterpartiesScreen(db: AppDatabase) {
                     Text(cp.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.DarkGray)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("وضعیت تراز مالی:", color = Color.Gray)
+                        Text("وضعیت حساب:", color = Color.Gray)
                         Text("$statusText: ${fmt.format(abs(totalToman))} تومان", color = statusColor, fontWeight = FontWeight.Bold)
                     }
                 }
