@@ -25,12 +25,14 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.*
@@ -68,7 +70,7 @@ interface MasterTransactionDao {
     fun saveTransaction(tx: MasterTransaction)
 }
 
-@Database(entities = [MasterTransaction::class], version = 2, exportSchema = false)
+@Database(entities = [MasterTransaction::class], version = 1, exportSchema = false)
 abstract class EngineeringDatabase : RoomDatabase() {
     abstract fun masterTransactionDao(): MasterTransactionDao
 }
@@ -84,7 +86,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // ساخت مستقیم دیتابیس ایزوله برای جلوگیری از کارهای ناقص قدیمی در پوشه های دیگر پروژه
         engineeringDb = Room.databaseBuilder(
             applicationContext,
             EngineeringDatabase::class.java, "production_voice_acc.db"
@@ -97,7 +98,6 @@ class MainActivity : ComponentActivity() {
             val coroutineScope = rememberCoroutineScope()
             val currentContext = LocalContext.current
 
-            // هندلر ابزار رسمی تبدیل گفتار به متن هوش مصنوعی گوگل
             val sttOverlayLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.StartActivityForResult()
             ) { result ->
@@ -105,12 +105,10 @@ class MainActivity : ComponentActivity() {
                     val speechToTextOutput = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.get(0) ?: ""
                     voiceTranscriptText = speechToTextOutput
                 }
-                // پس از پایان کار گوگل، رکوردر فایل صوتی را متوقف کرده و فایل را نهایی می‌کنیم
                 stopAudioRecording()
                 isVoiceRecordingActive = false
             }
 
-            // درخواست مجوز استفاده از میکروفون گوشی در ساختار Jetpack Compose
             val micPermissionRequest = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission()
             ) { isGranted ->
@@ -147,7 +145,6 @@ class MainActivity : ComponentActivity() {
                                 if (!isVoiceRecordingActive) {
                                     if (startAudioRecording()) {
                                         isVoiceRecordingActive = true
-                                        // همزمان رکوردر فایل صوتی استارت شده و موتور تشخیص گفتار گوگل باز می‌شود
                                         try {
                                             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                                                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -157,6 +154,8 @@ class MainActivity : ComponentActivity() {
                                             sttOverlayLauncher.launch(intent)
                                         } catch (e: Exception) {
                                             Toast.makeText(currentContext, "گوگل STT روی گوشی شما فعال نیست.", Toast.LENGTH_SHORT).show()
+                                            stopAudioRecording()
+                                            isVoiceRecordingActive = false
                                         }
                                     }
                                 }
@@ -193,7 +192,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // لایه ضبط فیزیکی فایل صوتی معاملات
     @Suppress("DEPRECATION")
     private fun startAudioRecording(): Boolean {
         return try {
@@ -262,7 +260,6 @@ fun EngineeredJournalScreen(
             Text("📈 سیستم مانیتورینگ فاکتورها: ${dataList.size} سند معتبر", color = Color(0xFF00E676), fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
 
-        // کامپوننت پیشرفته واژه‌کاو دستور صوتی
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)), shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -270,7 +267,7 @@ fun EngineeredJournalScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = textState,
-                        onValueChange = onTextStateChange,
+                        onValueChange = textStateChange,
                         placeholder = { Text("متن ویس شما خودکار اینجا پردازش می‌شود...") },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -279,18 +276,23 @@ fun EngineeredJournalScreen(
                         onClick = {
                             if (textState.isBlank()) return@Button
                             
-                            // موتور واژه‌کاو بومی پیشرفته فارسی (Advanced Tokenizer)
                             var name = "ناشناس"
-                            if (textState.contains("به ")) name = textState.substringAfter("به ").substringBefore(" ")
-                            if (textState.contains("از ")) name = textState.substringAfter("از ").substringBefore(" ")
+                            val trimmed = textState.trim()
+                            if (trimmed.contains("به ")) {
+                                val after = trimmed.substringAfter("به ").trim()
+                                name = if (after.contains(" ")) after.substringBefore(" ") else after
+                            } else if (trimmed.contains("از ")) {
+                                val after = trimmed.substringAfter("از ").trim()
+                                name = if (after.contains(" ")) after.substringBefore(" ") else after
+                            }
                             
-                            val digitsList = "[0-9]+".toRegex().findAll(textState).map { it.value.toDoubleOrNull() ?: 0.0 }.toList()
+                            val digitsList = "[0-9]+".toRegex().findAll(trimmed).map { it.value.toDoubleOrNull() ?: 0.0 }.toList()
                             val amount = if (digitsList.isNotEmpty()) digitsList[0] else 0.0
                             val rate = if (digitsList.size > 1) digitsList[1] else 1.0
                             
-                            val currency = if (textState.contains("یورو")) "یورو" else if (textState.contains("تومان")) "تومان" else "دلار"
-                            val type = if (textState.contains("خریدم") || textStatusContainsBuy(textState)) "BUY" else "SELL"
-                            val delivered = !textState.contains("تحویل نشد")
+                            val currency = if (trimmed.contains("یورو")) "یورو" else if (trimmed.contains("تومان")) "تومان" else "دلار"
+                            val type = if (trimmed.contains("خریدم") || trimmed.contains("بخر") || trimmed.contains("خریداری") || trimmed.contains("خرید")) "BUY" else "SELL"
+                            val delivered = !trimmed.contains("تحویل نشد")
 
                             onCommitTx(
                                 MasterTransaction(
@@ -305,7 +307,7 @@ fun EngineeredJournalScreen(
                             )
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
-                        modifier = Modifier.align(Alignment.End)
+                        modifier = Modifier.modifier = Modifier.align(Alignment.End)
                     ) {
                         Text("تجزیه و ثبت نهایی سند صوتی", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
@@ -313,7 +315,6 @@ fun EngineeredJournalScreen(
             }
         }
 
-        // فرم گرافیکی ثبت کاملاً دستی تراکنش‌ها
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)), shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -332,12 +333,12 @@ fun EngineeredJournalScreen(
                         Text("ارز تحویل فیزیکی داده شد", fontSize = 12.sp, color = Color.Gray)
                     }
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Row {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = mType == "SELL", onClick = { mType = "SELL" })
-                            Text("فروش", modifier = Modifier.padding(top = 10.dp))
+                            Text("فروش")
                             Spacer(modifier = Modifier.width(8.dp))
                             RadioButton(selected = mType == "BUY", onClick = { mType = "BUY" })
-                            Text("خرید", modifier = Modifier.padding(top = 10.dp))
+                            Text("خرید")
                         }
                         Button(onClick = {
                             val amt = mAmount.toDoubleOrNull() ?: 0.0
@@ -366,7 +367,6 @@ fun EngineeredJournalScreen(
 
         item { Text("📑 اسناد و ریزمعاملات دفتر روزنامه", color = Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
 
-        // لیست اسناد فاکتورها به همراه دکمه پخش ویس واقعی همان معامله
         items(dataList) { tx ->
             val numFormat = NumberFormat.getInstance(Locale.US)
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF21262D)), shape = RoundedCornerShape(8.dp)) {
@@ -386,7 +386,7 @@ fun EngineeredJournalScreen(
                                         player.prepare()
                                         player.start()
                                     } catch (e: Exception) {
-                                        // مدیریت امن خطای مدیا پلیر
+                                        // امن‌سازی سخت‌افزار صوت
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F141C)),
@@ -444,8 +444,4 @@ fun EngineeredLedgerScreen(dataList: List<MasterTransaction>) {
             }
         }
     }
-}
-
-fun textStatusContainsBuy(text: String): Boolean {
-    return text.contains("بخر") || text.contains("خریداری")
 }
