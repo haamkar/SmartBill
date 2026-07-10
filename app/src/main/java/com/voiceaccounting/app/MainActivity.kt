@@ -34,6 +34,7 @@ import com.voiceaccounting.app.data.model.Counterparty
 import com.voiceaccounting.app.data.model.Transaction
 import com.voiceaccounting.app.domain.VoiceProcessor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
