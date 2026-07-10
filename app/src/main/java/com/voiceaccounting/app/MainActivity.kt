@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
-                                icon = { Icon(Icons.Default.List, contentDescription = "روزنامه") },
+                                icon = { Icon(Icons.Default.Home, contentDescription = "روزنامه") },
                                 label = { Text("روزنامه") }
                             )
                             NavigationBarItem(
@@ -360,6 +360,8 @@ fun CounterpartiesScreen(db: AppDatabase) {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                 Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
                     Text(cp.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.DarkGray))
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("وضعیت تراز مالی:", color = Color.Gray)
