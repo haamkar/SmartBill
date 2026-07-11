@@ -29,13 +29,12 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,7 +69,7 @@ data class FinalTransaction(
     val exchangeRate: Double,
     val tomanAmount: Double,
     val isDelivered: Boolean,
-    val dateString: String, // فرمت: YYYY-MM-DD
+    val dateString: String,
     val audioPath: String? = null
 )
 
@@ -98,13 +97,13 @@ interface ApplicationMasterDao {
     suspend fun removeTransaction(tx: FinalTransaction)
 }
 
-@Database(entities = [FinalCounterparty::class, FinalTransaction::class], version = 3, exportSchema = false)
+@Database(entities = [FinalCounterparty::class, FinalTransaction::class], version = 4, exportSchema = false)
 abstract class ProductionDatabase : RoomDatabase() {
     abstract fun applicationMasterDao(): ApplicationMasterDao
 }
 
 // ==========================================
-// ۲. کنترلر سخت‌افزاری صوت و بدنه اصلی SMART EXCHANGER
+// ۲. بدنه اصلی برنامه و سخت‌افزار مدیریت صوت
 // ==========================================
 class MainActivity : ComponentActivity() {
     private lateinit var appDb: ProductionDatabase
@@ -116,7 +115,7 @@ class MainActivity : ComponentActivity() {
         
         appDb = Room.databaseBuilder(
             applicationContext,
-            ProductionDatabase::class.java, "engine_smart_exchanger_v6.db"
+            ProductionDatabase::class.java, "firmware_smart_exchanger_v7.db"
         ).fallbackToDestructiveMigration().build()
 
         setContent {
@@ -178,7 +177,7 @@ class MainActivity : ComponentActivity() {
                                                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                                                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                                                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
-                                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "معامله را بگویید...")
+                                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "معامله بازار را بگویید...")
                                                 }
                                                 speechIntentLauncher.launch(intent)
                                             } catch (e: Exception) {
@@ -211,6 +210,7 @@ class MainActivity : ComponentActivity() {
                             if (selectedTab == 0) {
                                 JournalTabMain(
                                     transactions = allTxList,
+                                    counterparties = allCpList,
                                     voiceText = textResultState,
                                     onVoiceTextChange = { textResultState = it },
                                     onDeleteTx = { tx ->
@@ -219,36 +219,22 @@ class MainActivity : ComponentActivity() {
                                     onUpdateTx = { tx ->
                                         coroutineScope.launch(Dispatchers.IO) { appDb.applicationMasterDao().updateTransaction(tx) }
                                     },
-                                    onCommitTx = { tx, rawText ->
-                                        coroutineScope.launch(Dispatchers.IO) {
-                                            var targetName = "ناشناس"
-                                            val trimmed = rawText.trim()
-                                            if (trimmed.contains("به ")) targetName = trimmed.substringAfter("به ").substringBefore(" ").trim()
-                                            if (trimmed.contains("از ")) targetName = trimmed.substringAfter("از ").substringBefore(" ").trim()
-                                            
-                                            val matchedCp = appDb.applicationMasterDao().findCounterpartyByName(targetName)
-                                            if (matchedCp == null) {
-                                                withContext(Dispatchers.Main) {
-                                                    Toast.makeText(context, "خطا: شخص '$targetName' یافت نشد! ابتدا او را دستی بسازید.", Toast.LENGTH_LONG).show()
-                                                }
-                                            } else {
-                                                appDb.applicationMasterDao().addTransaction(
-                                                    tx.copy(counterpartyId = matchedCp.id, personName = matchedCp.name, audioPath = currentRecordedPath)
-                                                )
-                                                currentRecordedPath = null
-                                                withContext(Dispatchers.Main) { textResultState = "" }
-                                            }
-                                        }
-                                    },
                                     onCommitManualTx = { tx, pName ->
                                         coroutineScope.launch(Dispatchers.IO) {
                                             val matchedCp = appDb.applicationMasterDao().findCounterpartyByName(pName)
                                             if (matchedCp == null) {
                                                 withContext(Dispatchers.Main) {
-                                                    Toast.makeText(context, "خطا: ابتدا شخص را در تب اشخاص بسازید.", Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, "خطا: شخص یافت نشد! ابتدا او را در تب اشخاص بسازید.", Toast.LENGTH_LONG).show()
                                                 }
                                             } else {
-                                                appDb.applicationMasterDao().addTransaction(tx.copy(counterpartyId = matchedCp.id, personName = matchedCp.name))
+                                                // اگر فایل صوتی ضبط شده وجود داشت، آن را به تراکنش دستی متصل کن
+                                                val finalTx = if (currentRecordedPath != null) {
+                                                    tx.copy(counterpartyId = matchedCp.id, personName = matchedCp.name, audioPath = currentRecordedPath)
+                                                } else {
+                                                    tx.copy(counterpartyId = matchedCp.id, personName = matchedCp.name)
+                                                }
+                                                appDb.applicationMasterDao().addTransaction(finalTx)
+                                                currentRecordedPath = null
                                             }
                                         }
                                     }
@@ -307,26 +293,29 @@ class MainActivity : ComponentActivity() {
 }
 
 // ==========================================
-// ۳. واجه کاربری تب دفتر روزنامه همراه با فیلتر بازه تاریخی
+// ۳. رابط کاربری تب دفتر روزنامه (Smart Exchanger)
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JournalTabMain(
     transactions: List<FinalTransaction>,
+    counterparties: List<FinalCounterparty>,
     voiceText: String,
     onVoiceTextChange: (String) -> Unit,
     onDeleteTx: (FinalTransaction) -> Unit,
     onUpdateTx: (FinalTransaction) -> Unit,
-    onCommitTx: (FinalTransaction, String) -> Unit,
     onCommitManualTx: (FinalTransaction, String) -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+
     var manualName by remember { mutableStateOf("") }
     var manualAmount by remember { mutableStateOf("") }
     var manualRate by remember { mutableStateOf("") }
     var manualType by remember { mutableStateOf("SELL") }
 
     var filterCurrencySelected by remember { mutableStateOf("همه") }
-    var filterDateMode by remember { mutableStateOf("همه") } // همه، امروز، بازه
+    var filterDateMode by remember { mutableStateOf("همه") }
     var startDateInput by remember { mutableStateOf("") }
     var endDateInput by remember { mutableStateOf("") }
     
@@ -348,12 +337,12 @@ fun JournalTabMain(
         var editRate by remember { mutableStateOf(editingTx!!.exchangeRate.toString()) }
         AlertDialog(
             onDismissRequest = { editingTx = null },
-            title = { Text("✏️ ویرایش هوشمند فاکتور") },
+            title = { Text("✏️ ویرایش فاکتور") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = editAmount, onValueChange = { editAmount = it }, label = { Text("مقدار جدید") })
                     if (editingTx!!.type == "BUY" || editingTx!!.type == "SELL") {
-                        OutlinedTextField(value = editRate, onValueChange = { editRate = it }, label = { Text("نرخ واحد جدید") })
+                        OutlinedTextField(value = editRate, onValueChange = { editRate = it }, label = { Text("نرخ جدید") })
                     }
                 }
             },
@@ -363,18 +352,16 @@ fun JournalTabMain(
                     val rt = editRate.toDoubleOrNull() ?: editingTx!!.exchangeRate
                     onUpdateTx(editingTx!!.copy(amount = amt, exchangeRate = rt, tomanAmount = amt * rt))
                     editingTx = null
-                }) { Text("بروزرسانی داده") }
+                }) { Text("بروزرسانی") }
             }
         )
     }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("📈 Smart Exchanger", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00E676))
-            Spacer(modifier = Modifier.height(6.dp))
-            
-            // بخش دکمه‌های فیلتر پیشرفته موتور مالی
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("📊 Smart Exchanger", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00E676))
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     filterDateMode = when(filterDateMode) {
                         "همه" -> "امروز"
@@ -382,7 +369,6 @@ fun JournalTabMain(
                         else -> "همه"
                     }
                 }, modifier = Modifier.weight(1f)) { Text("زمان: $filterDateMode") }
-                
                 Button(onClick = {
                     filterCurrencySelected = when(filterCurrencySelected) {
                         "همه" -> "دلار"
@@ -395,13 +381,13 @@ fun JournalTabMain(
 
             if (filterDateMode == "بازه") {
                 Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(value = startDateInput, onValueChange = { startDateInput = it }, placeholder = { Text("از: 2026-01-01") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = endDateInput, onValueChange = { endDateInput = it }, placeholder = { Text("تا: 2026-12-31") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = startDateInput, onValueChange = { startDateInput = it }, placeholder = { Text("از: YYYY-MM-DD") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = endDateInput, onValueChange = { endDateInput = it }, placeholder = { Text("تا: YYYY-MM-DD") }, modifier = Modifier.weight(1f))
                 }
             }
         }
 
-        // ماژول ویس فاکتورها
+        // بخش صوتی (که فیلدهای دستی پایین را پر می‌کند)
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22))) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -411,32 +397,43 @@ fun JournalTabMain(
                         onClick = {
                             if (voiceText.isBlank()) return@Button
                             val trimmed = voiceText.trim()
-                            val digits = "[0-9]+".toRegex().findAll(trimmed).map { it.value.toDoubleOrNull() ?: 0.0 }.toList()
-                            val amt = if(digits.isNotEmpty()) digits[0] else 0.0
-                            val rate = if(digits.size > 1) digits[1] else 1.0
-                            val cur = if(trimmed.contains("یورو")) "یورو" else if(trimmed.contains("تومان")) "تومان" else "دلار"
-                            val tp = if(trimmed.contains("خرید") || trimmed.contains("خریدم")) "BUY" else "SELL"
-                            val del = !trimmed.contains("تحویل نشد")
-
-                            onCommitTx(
-                                FinalTransaction(counterpartyId = 0, personName = "", type = tp, amount = amt, currencyType = cur, exchangeRate = rate, tomanAmount = amt * rate, isDelivered = del, dateString = todayDateStr),
-                                trimmed
-                            )
+                            
+                            // استخراج هوشمند نام شخص از ویس
+                            var detectedName = "ناشناس"
+                            if (trimmed.contains("به ")) detectedName = trimmed.substringAfter("به ").substringBefore(" ").trim()
+                            if (trimmed.contains("از ")) detectedName = trimmed.substringAfter("از ").substringBefore(" ").trim()
+                            
+                            // بررسی ممنوعیت ساخت خودکار شخص
+                            val personExists = counterparties.any { it.name == detectedName }
+                            if (!personExists) {
+                                // زدن ویبره هشدار طولانی به کاربر
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                Toast.makeText(context, "خطا: شخص '$detectedName' یافت نشد! ابتدا او را دستی بسازید.", Toast.LENGTH_LONG).show()
+                            } else {
+                                val digits = "[0-9]+".toRegex().findAll(trimmed).map { it.value }.toList()
+                                manualName = detectedName
+                                manualAmount = if(digits.isNotEmpty()) digits[0] else ""
+                                manualRate = if(digits.size > 1) digits[1] else ""
+                                manualCurrency = if(trimmed.contains("یورو")) "یورو" else if(trimmed.contains("تومان")) "تومان" else "دلار"
+                                manualType = if(trimmed.contains("خرید") || trimmed.contains("خریدم")) "BUY" else "SELL"
+                                
+                                Toast.makeText(context, "اطلاعات ویس به فرم دستی پایین منتقل شد. بررسی و تایید کنید.", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
                         modifier = Modifier.align(Alignment.End)
-                    ) { Text("ثبت سند ویس", color = Color.Black) }
+                    ) { Text("تحلیل و انتقال به فرم", color = Color.Black) }
                 }
             }
         }
 
-        // فرم ثبت فاکتور به صورت کاملاً دستی با قابلیت تسویه حساب تومانی خالص
+        // ماژول دستی فاکتورها
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22))) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("✏️ ثبت فاکتور دستی و تسویه‌حساب‌ها", fontWeight = FontWeight.Bold)
+                    Text("✏️ ماژول تایید و ثبت فاکتور نهایی", Jack = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام") }, modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام شخص") }, modifier = Modifier.weight(1f))
                         OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار") }, modifier = Modifier.weight(1f))
                     }
                     if (manualType == "SELL" || manualType == "BUY") {
@@ -444,10 +441,10 @@ fun JournalTabMain(
                     }
                     
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Button(onClick = { manualType = "SELL" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="SELL") Color(0xFF00E676) else Color.DarkGray), modifier = Modifier.weight(1fr)) { Text("فروش", fontSize = 11.sp) }
-                        Button(onClick = { manualType = "BUY" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="BUY") Color(0xFFFF5252) else Color.DarkGray), modifier = Modifier.weight(1fr)) { Text("خرید", fontSize = 11.sp) }
-                        Button(onClick = { manualType = "RECEIVE_TOMAN" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="RECEIVE_TOMAN") Color.Cyan else Color.DarkGray), modifier = Modifier.weight(1fr)) { Text("+تومان", fontSize = 11.sp) }
-                        Button(onClick = { manualType = "PAY_TOMAN" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="PAY_TOMAN") Color.Magenta else Color.DarkGray), modifier = Modifier.weight(1fr)) { Text("-تومان", fontSize = 11.sp) }
+                        Button(onClick = { manualType = "SELL" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="SELL") Color(0xFF00E676) else Color.DarkGray), modifier = Modifier.weight(1f)) { Text("فروش", fontSize = 11.sp) }
+                        Button(onClick = { manualType = "BUY" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="BUY") Color(0xFFFF5252) else Color.DarkGray), modifier = Modifier.weight(1f)) { Text("خرید", fontSize = 11.sp) }
+                        Button(onClick = { manualType = "RECEIVE_TOMAN" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="RECEIVE_TOMAN") Color.Cyan else Color.DarkGray), modifier = Modifier.weight(1f)) { Text("+تومان", fontSize = 11.sp) }
+                        Button(onClick = { manualType = "PAY_TOMAN" }, colors = ButtonDefaults.buttonColors(containerColor = if(manualType=="PAY_TOMAN") Color.Magenta else Color.DarkGray), modifier = Modifier.weight(1f)) { Text("-تومان", fontSize = 11.sp) }
                     }
 
                     Button(onClick = {
@@ -462,7 +459,7 @@ fun JournalTabMain(
                         )
                         manualName = ""; manualAmount = ""; manualRate = ""
                     }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)), modifier = Modifier.fillMaxWidth()) { 
-                        Text("ذخیره نهایی در دیتابیس", color = Color.Black, fontWeight = FontWeight.Bold) 
+                        Text("ذخیره قطعی فاکتور", color = Color.Black, fontWeight = FontWeight.Bold) 
                     }
                 }
             }
@@ -473,18 +470,18 @@ fun JournalTabMain(
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF21262D))) {
                 Row(modifier = Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(tx.personName, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                        Text(tx.personName, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                         Text(
                             text = "${when(tx.type){"SELL"->"فروش" "BUY"->"خرید" "RECEIVE_TOMAN"->"دریافت نقدی" else->"پرداخت نقدی"}} ➡️ ${fmt.format(tx.amount)} ${tx.currencyType}", 
-                            fontSize = 20.sp, 
+                            fontSize = 22.sp, 
                             fontWeight = FontWeight.Bold, 
                             color = Color.Yellow
                         )
                         if(tx.type == "BUY" || tx.type == "SELL") {
-                            Text("نرخ واحد: ${fmt.format(tx.exchangeRate)} تومان", fontSize = 14.sp, color = Color.Gray)
+                            Text("نرخ معامله: ${fmt.format(tx.exchangeRate)} تومان", fontSize = 14.sp, color = Color.Gray)
                         }
                         if (!tx.audioPath.isNullOrBlank()) {
-                            Text("▶️ پخش صدای فاکتور معامله", color = Color(0xFF00E676), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp).clickable {
+                            Text("▶️ پخش فایل صوتی معامله", color = Color(0xFF00E676), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp).clickable {
                                 try {
                                     val mp = MediaPlayer()
                                     mp.setDataSource(tx.audioPath)
@@ -495,7 +492,7 @@ fun JournalTabMain(
                         }
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("${fmt.format(tx.tomanAmount)} ت", color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0xFFFF5252) else Color(0xFF00E676), fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                        Text("${fmt.format(tx.tomanAmount)} ت", color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color(0xFFFF5252) else Color(0xFF00E676), fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
                         Row {
                             IconButton(onClick = { editingTx = tx }) { Icon(Icons.Default.Edit, "ویرایش", tint = Color.Cyan) }
                             IconButton(onClick = { onDeleteTx(tx) }) { Icon(Icons.Default.Delete, "حذف", tint = Color.Red) }
@@ -521,7 +518,7 @@ fun CounterpartiesTabMain(
     var newPersonName by remember { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("👥 ساخت حساب کاربری دستی فرد جدید", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text("👥 ساخت طرف حساب دستی جدید", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(value = newPersonName, onValueChange = { newPersonName = it }, placeholder = { Text("نام حساب جدید...") }, modifier = Modifier.weight(1f))
             Button(onClick = {
@@ -572,7 +569,7 @@ fun PersonLedgerDetailScreen(
     onBack: () -> Unit
 ) {
     var pCurrencyFilter by remember { mutableStateOf("همه") }
-    var pDateFilterMode by remember { mutableStateOf("همه") } // همه، بازه
+    var pDateFilterMode by remember { mutableStateOf("همه") }
     var pStartRange by remember { mutableStateOf("") }
     var pEndRange by remember { mutableStateOf("") }
 
@@ -601,21 +598,20 @@ fun PersonLedgerDetailScreen(
                 Text("تراز کلی حساب شخص در بازار:", color = Color.Gray, fontSize = 14.sp)
                 Text(
                     text = if(totalBalance > 0) "بدهکار به ما: ${NumberFormat.getInstance(Locale.US).format(totalBalance)} تومان" else "بستانکار از ما: ${NumberFormat.getInstance(Locale.US).format(abs(totalBalance))} تومان",
-                    fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = if(totalBalance > 0) Color(0xFFFF5252) else Color(0xFF00E676)
+                    fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = if(totalBalance > 0) Color(0xFFFF5252) else Color(0xFF00E676)
                 )
             }
         }
 
-        // جعبه فیلترهای فاکتور داخل معین شخص
-        Text("🗛 فیلترهای معین شخص:", color = Color.Gray, fontSize = 12.sp)
+        Text("🗛 تنظیم فیلترهای زمانی حساب معین شخص:", color = Color.Gray, fontSize = 12.sp)
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { pDateFilterMode = if(pDateFilterMode=="همه") "بازه" else "همه" }, modifier = Modifier.weight(1f)) { Text("زمان: $pDateFilterMode") }
             Button(onClick = { pCurrencyFilter = when(pCurrencyFilter){ "همه"->"دلار" "دلار"->"یورو" "یورو"->"تومان" else->"همه" } }, modifier = Modifier.weight(1f)) { Text("ارز: $pCurrencyFilter") }
         }
         if (pDateFilterMode == "بازه") {
             Row(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedTextField(value = pStartRange, onValueChange = { pStartRange = it }, placeholder = { Text("از: 2026-01-01") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(value = pEndRange, onValueChange = { pEndRange = it }, placeholder = { Text("تا: 2026-12-31") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(value = pStartRange, onValueChange = { pStartRange = it }, placeholder = { Text("از: YYYY-MM-DD") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(value = pEndRange, onValueChange = { pEndRange = it }, placeholder = { Text("تا: YYYY-MM-DD") }, modifier = Modifier.weight(1f))
             }
         }
 
@@ -626,9 +622,9 @@ fun PersonLedgerDetailScreen(
                     Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Column {
                             Text("نوع: ${when(tx.type){"SELL"->"فروش ارز" "BUY"->"خرید ارز" "RECEIVE_TOMAN"->"دریافت نقدی" else->"پرداخت نقدی"}}", color = Color.White, fontSize = 16.sp)
-                            Text("مقدار: ${fmt.format(tx.amount)} ${tx.currencyType}", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Yellow)
+                            Text("مقدار: ${fmt.format(tx.amount)} ${tx.currencyType}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.Yellow)
                         }
-                        Text("${fmt.format(tx.tomanAmount)} ت", fontWeight = FontWeight.ExtraBold, color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color.Red else Color.Green, fontSize = 18.sp)
+                        Text("${fmt.format(tx.tomanAmount)} ت", fontWeight = FontWeight.ExtraBold, color = if(tx.type == "BUY" || tx.type == "PAY_TOMAN") Color.Red else Color.Green, fontSize = 20.sp)
                     }
                 }
             }
