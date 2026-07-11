@@ -97,13 +97,13 @@ interface ApplicationMasterDao {
     suspend fun removeTransaction(tx: FinalTransaction)
 }
 
-@Database(entities = [FinalCounterparty::class, FinalTransaction::class], version = 4, exportSchema = false)
+@Database(entities = [FinalCounterparty::class, FinalTransaction::class], version = 1, exportSchema = false)
 abstract class ProductionDatabase : RoomDatabase() {
     abstract fun applicationMasterDao(): ApplicationMasterDao
 }
 
 // ==========================================
-// ۲. بدنه اصلی برنامه و سخت‌افزار مدیریت صوت
+// ۲. بدنه اصلی برنامه SMART EXCHANGER
 // ==========================================
 class MainActivity : ComponentActivity() {
     private lateinit var appDb: ProductionDatabase
@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
         
         appDb = Room.databaseBuilder(
             applicationContext,
-            ProductionDatabase::class.java, "firmware_smart_exchanger_v7.db"
+            ProductionDatabase::class.java, "firmware_smart_exchanger_v10.db"
         ).fallbackToDestructiveMigration().build()
 
         setContent {
@@ -224,10 +224,9 @@ class MainActivity : ComponentActivity() {
                                             val matchedCp = appDb.applicationMasterDao().findCounterpartyByName(pName)
                                             if (matchedCp == null) {
                                                 withContext(Dispatchers.Main) {
-                                                    Toast.makeText(context, "خطا: شخص یافت نشد! ابتدا او را در تب اشخاص بسازید.", Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, "خطا: ابتدا شخص را در تب اشخاص بسازید.", Toast.LENGTH_LONG).show()
                                                 }
                                             } else {
-                                                // اگر فایل صوتی ضبط شده وجود داشت، آن را به تراکنش دستی متصل کن
                                                 val finalTx = if (currentRecordedPath != null) {
                                                     tx.copy(counterpartyId = matchedCp.id, personName = matchedCp.name, audioPath = currentRecordedPath)
                                                 } else {
@@ -387,7 +386,7 @@ fun JournalTabMain(
             }
         }
 
-        // بخش صوتی (که فیلدهای دستی پایین را پر می‌کند)
+        // بخش تحلیل صوتی و انتقال به کادرهای دستی صرافی
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22))) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -398,15 +397,12 @@ fun JournalTabMain(
                             if (voiceText.isBlank()) return@Button
                             val trimmed = voiceText.trim()
                             
-                            // استخراج هوشمند نام شخص از ویس
                             var detectedName = "ناشناس"
                             if (trimmed.contains("به ")) detectedName = trimmed.substringAfter("به ").substringBefore(" ").trim()
                             if (trimmed.contains("از ")) detectedName = trimmed.substringAfter("از ").substringBefore(" ").trim()
                             
-                            // بررسی ممنوعیت ساخت خودکار شخص
                             val personExists = counterparties.any { it.name == detectedName }
                             if (!personExists) {
-                                // زدن ویبره هشدار طولانی به کاربر
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 Toast.makeText(context, "خطا: شخص '$detectedName' یافت نشد! ابتدا او را دستی بسازید.", Toast.LENGTH_LONG).show()
                             } else {
@@ -417,7 +413,7 @@ fun JournalTabMain(
                                 manualCurrency = if(trimmed.contains("یورو")) "یورو" else if(trimmed.contains("تومان")) "تومان" else "دلار"
                                 manualType = if(trimmed.contains("خرید") || trimmed.contains("خریدم")) "BUY" else "SELL"
                                 
-                                Toast.makeText(context, "اطلاعات ویس به فرم دستی پایین منتقل شد. بررسی و تایید کنید.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "اطلاعات ویس به فرم دستی پایین منتقل شد.", Toast.LENGTH_SHORT).show()
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
@@ -427,11 +423,11 @@ fun JournalTabMain(
             }
         }
 
-        // ماژول دستی فاکتورها
+        // ماژول فرم دستی و دکمه‌های کنترلی تسویه
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22))) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("✏️ ماژول تایید و ثبت فاکتور نهایی", Jack = FontWeight.Bold)
+                    Text("✏️ ماژول تایید و ثبت فاکتور نهایی", fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(value = manualName, onValueChange = { manualName = it }, label = { Text("نام شخص") }, modifier = Modifier.weight(1f))
                         OutlinedTextField(value = manualAmount, onValueChange = { manualAmount = it }, label = { Text("مقدار") }, modifier = Modifier.weight(1f))
@@ -505,7 +501,7 @@ fun JournalTabMain(
 }
 
 // ==========================================
-// ۴. تب اشخاص و مدیریت ساخت کاملاً دستی
+// ۴. تب اشخاص و مدیریت ساخت کاملاً دستی افراد
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
